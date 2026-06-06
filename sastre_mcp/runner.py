@@ -1,0 +1,209 @@
+"""Run Sastre TaskShow against vManage using cisco_sdwan in-process."""
+
+import hashlib
+import json
+import logging
+import uuid
+from collections.abc import Callable
+from typing import Literal
+
+import requests
+from cisco_sdwan.base.rest_api import (
+    BadTenantException,
+    LoginFailedException,
+    Rest,
+    RestAPIException,
+    ServerRateLimitException,
+)
+from cisco_sdwan.tasks.implementation import (
+    ShowAlarmsArgs,
+    ShowDevicesArgs,
+    ShowEventsArgs,
+    ShowRealtimeArgs,
+    ShowStateArgs,
+    ShowStatisticsArgs,
+    TaskShow,
+)
+
+from sastre_mcp.config import SdwanManagerConfig, get_config, manager_base_url
+from sastre_mcp.session_pool import SessionPoolTimeout, run_with_session
+
+logger = logging.getLogger(__name__)
+
+Format = Literal["text", "json"]
+
+
+def _clean_error_message(exc: Exception) -> str:
+    """Map an SDK/transport exception to a client-safe message (no internals)."""
+    if isinstance(exc, SessionPoolTimeout):
+        return "SD-WAN Manager is busy handling other requests; please retry in a few moments."
+    if isinstance(exc, LoginFailedException):
+        return (
+            "Authentication to SD-WAN Manager failed; check the configured credentials or API key."
+        )
+    if isinstance(exc, BadTenantException):
+        return "The configured tenant is invalid for this SD-WAN Manager."
+    if isinstance(exc, ServerRateLimitException):
+        return "SD-WAN Manager is rate-limiting requests; please retry later."
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "TLS/SSL error while connecting to SD-WAN Manager."
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "Timed out while communicating with SD-WAN Manager."
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "Could not connect to SD-WAN Manager; the host may be unreachable."
+    if isinstance(exc, RestAPIException):
+        return "SD-WAN Manager returned an error while processing the request."
+    if isinstance(exc, requests.exceptions.RequestException):
+        return "A network error occurred while communicating with SD-WAN Manager."
+    return "An unexpected error occurred while executing the show task."
+
+
+type ShowTaskArgs = (
+    ShowDevicesArgs
+    | ShowRealtimeArgs
+    | ShowStateArgs
+    | ShowStatisticsArgs
+    | ShowAlarmsArgs
+    | ShowEventsArgs
+)
+
+
+def _connection_params(
+    manager: SdwanManagerConfig,
+) -> tuple[str, str | None, str | None, str | None]:
+    """Resolve (base_url, password, apikey, tenant) for a manager."""
+    base_url = manager_base_url(manager)
+    password = manager.password.get_secret_value() if manager.password else None
+    apikey = manager.apikey.get_secret_value() if manager.apikey else None
+    if apikey is not None and apikey.strip() == "":
+        apikey = None
+    return base_url, password, apikey, manager.tenant
+
+
+def _session_fingerprint(manager: SdwanManagerConfig) -> str:
+    """Stable hash of connection params so the pool rebuilds when they change.
+
+    Secrets are hashed (never stored or logged in the clear) only to detect
+    configuration changes between reloads.
+    """
+    base_url, password, apikey, tenant = _connection_params(manager)
+    parts = [
+        base_url,
+        manager.user or "",
+        password or "",
+        apikey or "",
+        tenant or "",
+        str(manager.timeout),
+    ]
+    return hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()
+
+
+def _make_rest_factory(manager: SdwanManagerConfig) -> Callable[[], Rest]:
+    base_url, password, apikey, tenant = _connection_params(manager)
+    user = manager.user
+    timeout = manager.timeout
+
+    def factory() -> Rest:
+        return Rest(
+            base_url,
+            user,
+            password,
+            apikey=apikey,
+            tenant_name=tenant,
+            timeout=timeout,
+        )
+
+    return factory
+
+
+def run_show_args(
+    args: ShowTaskArgs,
+    *,
+    output_format: Format = "text",
+    manager: str | None = None,
+) -> str:
+    """
+    Execute `sdwan show ...` via TaskShow.runner with validated Show*Args (Sastre SDK pattern).
+
+    `manager` selects which configured SD-WAN Manager to connect to by name;
+    when None, the configured default_manager is used.
+    """
+    cfg = get_config()
+    try:
+        sdwan_manager = cfg.get_manager(manager)
+    except ValueError as exc:
+        # Manager-selection errors are user-actionable and already safe to surface.
+        return f"Error: {exc}"
+
+    correlation_id = uuid.uuid4().hex[:12]
+    try:
+        task = TaskShow()  # type: ignore[no-untyped-call]  # cisco_sdwan TaskShow.__init__ lacks annotations
+        tables = run_with_session(
+            key=sdwan_manager.name,
+            fingerprint=_session_fingerprint(sdwan_manager),
+            factory=_make_rest_factory(sdwan_manager),
+            max_size=cfg.limits.max_sessions_per_manager,
+            max_idle_secs=cfg.limits.session_max_idle_secs,
+            acquire_timeout_secs=cfg.limits.session_acquire_timeout_secs,
+            operation=lambda api: task.runner(args, api),
+        )
+
+        if not tables:
+            return "No tabular output (empty result, or data exported only to files)."
+
+        if output_format == "json":
+            # Serialize in-memory (mirrors cisco_sdwan.tasks.common.export_json)
+            # to avoid round-tripping through a temp file on disk.
+            return json.dumps([table.dict() for table in tables], indent=2)
+
+        return "\n\n".join(str(entry) for entry in tables)
+    except Exception as exc:
+        # Full detail (incl. traceback) is logged server-side only; the client
+        # receives a sanitized message plus a correlation id for support.
+        logger.exception(
+            "show task failed [ref=%s] manager=%s output_format=%s",
+            correlation_id,
+            sdwan_manager.name,
+            output_format,
+        )
+        return f"Error: {_clean_error_message(exc)} (reference id: {correlation_id})"
+
+
+def list_sdwan_managers_info() -> str:
+    """Return configured SD-WAN Managers (names, addresses; never secrets)."""
+    cfg = get_config()
+    lines = ["Configured SD-WAN Managers:"]
+    for manager in cfg.sdwan_managers:
+        is_default = " (default)" if manager.name == cfg.default_manager else ""
+        auth = "apikey" if manager.apikey else "user/password"
+        lines.append(
+            f"- {manager.name}{is_default}: {manager.address}:{manager.port} "
+            f"(auth: {auth}, tenant: {manager.tenant or 'none'})"
+        )
+    lines.append("")
+    lines.append(
+        "Pass the chosen name as the `manager` argument to a show tool; omit it to use the default."
+    )
+    return "\n".join(lines)
+
+
+def operational_commands_help() -> str:
+    """List show command groups and commands for RT / STATE / STATS (static catalog text)."""
+    from cisco_sdwan.base.catalog import CATALOG_TAG_ALL, OpType
+    from cisco_sdwan.tasks.utils import OpCmdOptions
+
+    lines = [
+        "Operational command groups and commands for `show realtime|state|statistics`.",
+        f'Use group "{CATALOG_TAG_ALL}" to select all commands in a category.',
+        "",
+    ]
+    for op_type, label in (
+        (OpType.RT, "realtime (OpType.RT)"),
+        (OpType.STATE, "state (OpType.STATE)"),
+        (OpType.STATS, "statistics (OpType.STATS)"),
+    ):
+        lines.append(f"## {label}")
+        lines.append(f"Groups: {OpCmdOptions.tags(op_type)}")
+        lines.append(f"Commands: {OpCmdOptions.commands(op_type)}")
+        lines.append("")
+    return "\n".join(lines).rstrip()

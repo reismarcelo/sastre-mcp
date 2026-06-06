@@ -1,0 +1,60 @@
+# Copy to config.yaml and adjust. Do not commit real secrets (config.yaml is gitignored).
+# Restrict permissions on the real file, e.g. `chmod 600 config.yaml`.
+
+# Any string value may reference an environment variable so secrets need not
+# sit on disk: ${VAR} expands to that variable (startup fails if it is unset)
+# and ${VAR:-default} falls back to "default" when the variable is unset.
+# Use $${ for a literal "${". Example: password: "${PRIMARY_VMANAGE_PASSWORD}"
+
+# One or more SD-WAN Managers (formerly "vmanage"). Each must have a unique name.
+sdwan_managers:
+  - name: "primary"
+    address: "10.0.0.1"
+    port: "443"
+    user: "admin"
+    password: "change-me"  # or e.g. "${PRIMARY_VMANAGE_PASSWORD}" to read from the environment
+    # Or use API key instead of user/password (omit or null the other):
+    # apikey: "your-api-key"
+    tenant: null
+    timeout: 300
+  - name: "secondary"
+    address: "10.0.1.1"
+    port: "443"
+    user: "admin"
+    password: "change-me"
+    tenant: null
+    timeout: 300
+
+# Optional: which manager tools use when none is specified.
+# Defaults to the first entry above if omitted.
+default_manager: "primary"
+
+mcp:
+  host: "127.0.0.1"
+  port: 8765
+  bearer_token: "generate-a-long-random-secret"  # or e.g. "${MCP_BEARER_TOKEN}"
+  stateless_http: true
+  cors_origins: []
+  disable_rate_limit: false
+
+limits:
+  # Show argument validation (regex length, command syntax, site IDs, days/hours,
+  # max records, etc.) is handled by the cisco-sdwan Show*Args models themselves.
+  max_body_bytes: 2097152
+  rate_limit_window_secs: 60
+  rate_limit_max_requests: 120
+  # IPs/CIDRs of trusted reverse proxies. When set and a request arrives from
+  # one of these, the client IP for rate limiting is taken from the
+  # X-Forwarded-For header (the closest non-proxy entry). Leave empty unless you
+  # run behind a proxy you control; X-Forwarded-For is spoofable otherwise.
+  # Note: rate limit counters are per-process; see README for multi-worker notes.
+  rate_limit_trusted_proxies: []
+  # Logged-in vManage sessions are pooled and reused per manager to avoid a full
+  # login on every request. max_sessions_per_manager also caps how many
+  # connections may be open against one SD-WAN Manager at once (a concurrency
+  # bound); requests wait up to session_acquire_timeout_secs for a free session.
+  # An idle session unused for longer than session_max_idle_secs is dropped and
+  # re-created to avoid server-side timeouts (0 disables idle eviction).
+  max_sessions_per_manager: 4
+  session_max_idle_secs: 600
+  session_acquire_timeout_secs: 30
