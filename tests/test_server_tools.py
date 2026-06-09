@@ -1,4 +1,4 @@
-"""Tool-level tests for the FastMCP server (no live vManage).
+"""Tool-level tests for the FastMCP server (no live SDWAN Manager).
 
 These call the registered MCP tools end-to-end (through ``call_tool``) with
 ``run_show_args`` patched out, exercising each tool body, the ``_run_show``

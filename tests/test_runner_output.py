@@ -1,4 +1,4 @@
-"""Output formatting of run_show_args (no live vManage, mocked session run)."""
+"""Output formatting of run_show_args (no live SDWAN Manager, mocked session run)."""
 
 import json
 

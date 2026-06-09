@@ -10,7 +10,7 @@
 sdwan_managers:
   - name: "primary"
     address: "10.0.0.1"
-    port: "443"
+    port: 443
     user: "admin"
     password: "change-me"  # or e.g. "${PRIMARY_VMANAGE_PASSWORD}" to read from the environment
     # Or use API key instead of user/password (omit or null the other):
@@ -19,7 +19,7 @@ sdwan_managers:
     timeout: 300
   - name: "secondary"
     address: "10.0.1.1"
-    port: "443"
+    port: 443
     user: "admin"
     password: "change-me"
     tenant: null
@@ -49,7 +49,7 @@ limits:
   # run behind a proxy you control; X-Forwarded-For is spoofable otherwise.
   # Note: rate limit counters are per-process; see README for multi-worker notes.
   rate_limit_trusted_proxies: []
-  # Logged-in vManage sessions are pooled and reused per manager to avoid a full
+  # Logged-in SDWAN Manager sessions are pooled and reused per manager to avoid a full
   # login on every request. max_sessions_per_manager also caps how many
   # connections may be open against one SD-WAN Manager at once (a concurrency
   # bound); requests wait up to session_acquire_timeout_secs for a free session.

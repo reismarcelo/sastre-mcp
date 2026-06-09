@@ -161,16 +161,16 @@ wheels = [
 
 [[package]]
 name = "cisco-sdwan"
-version = "1.27"
+version = "1.28"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f1/a4/8b7150f7ac933b672c9c79650ecd4047daf9f7ceb13212d6612cbf1b142b/cisco_sdwan-1.27.tar.gz", hash = "sha256:c3fb4c77e315bf89572ae7216a5bee08ba96b05c4e5661a3456dcc2664693281", size = 136530, upload-time = "2026-02-11T22:23:50.346Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/25/a9/583fde8b837307392cf6091e2c35936fe21351bd912b5624d9070dbddad5/cisco_sdwan-1.28.tar.gz", hash = "sha256:eec8eda197616b1f913d69cb19de09ca759c476a95d32a68b63e469fa2e42f69", size = 140938, upload-time = "2026-06-05T19:50:46.264Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/3f/35fe70a4d86be9f24b5022cc8d28f4af99eaf365799ec7c9a7c4e88f3212/cisco_sdwan-1.27-py3-none-any.whl", hash = "sha256:5f0094c2ec35945300d9803c488c783cf946261a850a10b3f7efdf257b8b546e", size = 140801, upload-time = "2026-02-11T22:23:48.593Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/a7/08e4eb285da69a885e5fa15aaa95de25906c25212d42a16efb030a16431f/cisco_sdwan-1.28-py3-none-any.whl", hash = "sha256:7c52066962c1ca54b22f0d591ee4e1d68ef70271e986fc12c0ada7ff13570f3b", size = 145384, upload-time = "2026-06-05T19:50:45.013Z" },
 ]
 
 [[package]]
@@ -808,7 +808,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cisco-sdwan", specifier = ">=1.27" },
+    { name = "cisco-sdwan", specifier = ">=1.28" },
     { name = "httpx", marker = "extra == 'dev'", specifier = "==0.28.1" },
     { name = "mcp", specifier = ">=1.27.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },

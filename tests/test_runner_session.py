@@ -1,4 +1,4 @@
-"""run_show_args integration with the session pool (no live vManage)."""
+"""run_show_args integration with the session pool (no live SDWAN Manager)."""
 
 from sastre_mcp import runner
 from sastre_mcp.session_pool import SessionPoolTimeout

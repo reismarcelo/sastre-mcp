@@ -29,7 +29,7 @@ def _parse_networks(values: Iterable[str]) -> list[_IpNetwork]:
         try:
             networks.append(ipaddress.ip_network(value, strict=False))
         except ValueError:
-            logger.warning("ignoring invalid trusted_proxy entry=%s", value)
+            logger.warning(f"ignoring invalid trusted_proxy entry={value}")
     return networks
 
 
@@ -137,7 +137,7 @@ class MaxBodySizeMiddleware:
             if response_started:
                 # Headers already flushed downstream; cannot send a clean 413.
                 raise
-            logger.warning("payload_too_large host=%s", _scope_client_host(scope))
+            logger.warning(f"payload_too_large host={_scope_client_host(scope)}")
             await self._reject(scope, send, 413, "payload_too_large")
 
     async def _reject(self, scope: Scope, send: Send, status_code: int, error: str) -> None:
@@ -163,16 +163,14 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._expected_token = expected_token.encode("utf-8")
 
-    async def dispatch(
-        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         auth = request.headers.get("authorization") or ""
         prefix = "Bearer "
         if not auth.startswith(prefix):
             return JSONResponse(
                 {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
             )
-        token = auth[len(prefix) :].strip().encode("utf-8")
+        token = auth[len(prefix):].strip().encode("utf-8")
         if not token or not hmac.compare_digest(token, self._expected_token):
             return JSONResponse(
                 {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
@@ -215,9 +213,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         for host in stale:
             del self._hits[host]
 
-    async def dispatch(
-        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         now = time.monotonic()
         window_start = now - self._window_secs
         if now - self._last_prune >= self._window_secs:
@@ -230,7 +226,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._hits[host] = bucket
         bucket[:] = [t for t in bucket if t > window_start]
         if len(bucket) >= self._max_requests:
-            logger.warning("rate_limit_exceeded host=%s", host)
+            logger.warning(f"rate_limit_exceeded host={host}")
             return JSONResponse({"error": "rate_limited"}, status_code=429)
         bucket.append(now)
         return await call_next(request)

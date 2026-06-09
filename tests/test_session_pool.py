@@ -1,4 +1,4 @@
-"""Tests for the per-manager vManage session pool (no live vManage)."""
+"""Tests for the per-manager SDWAN Manager session pool (no live SDWAN Manager)."""
 
 import threading
 import time

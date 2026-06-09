@@ -1,4 +1,4 @@
-"""Run Sastre TaskShow against vManage using cisco_sdwan in-process."""
+"""Run Sastre TaskShow against SDWAN Manager using cisco_sdwan in-process."""
 
 import hashlib
 import json
@@ -38,9 +38,7 @@ def _clean_error_message(exc: Exception) -> str:
     if isinstance(exc, SessionPoolTimeout):
         return "SD-WAN Manager is busy handling other requests; please retry in a few moments."
     if isinstance(exc, LoginFailedException):
-        return (
-            "Authentication to SD-WAN Manager failed; check the configured credentials or API key."
-        )
+        return "Authentication to SD-WAN Manager failed; check the configured credentials or API key."
     if isinstance(exc, BadTenantException):
         return "The configured tenant is invalid for this SD-WAN Manager."
     if isinstance(exc, ServerRateLimitException):
@@ -68,65 +66,41 @@ type ShowTaskArgs = (
 )
 
 
-def _connection_params(
-    manager: SdwanManagerConfig,
-) -> tuple[str, str | None, str | None, str | None]:
-    """Resolve (base_url, password, apikey, tenant) for a manager."""
-    base_url = manager_base_url(manager)
-    password = manager.password.get_secret_value() if manager.password else None
-    apikey = manager.apikey.get_secret_value() if manager.apikey else None
-    if apikey is not None and apikey.strip() == "":
-        apikey = None
-    return base_url, password, apikey, manager.tenant
-
-
 def _session_fingerprint(manager: SdwanManagerConfig) -> str:
     """Stable hash of connection params so the pool rebuilds when they change.
 
-    Secrets are hashed (never stored or logged in the clear) only to detect
-    configuration changes between reloads.
+    Secrets are hashed (never stored or logged in the clear) only to detect configuration changes between reloads.
     """
-    base_url, password, apikey, tenant = _connection_params(manager)
     parts = [
-        base_url,
+        manager_base_url(manager),
         manager.user or "",
-        password or "",
-        apikey or "",
-        tenant or "",
+        manager.password.get_secret_value() if manager.password else "",
+        manager.apikey.get_secret_value() if manager.apikey else "",
+        manager.tenant or "",
         str(manager.timeout),
     ]
     return hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()
 
 
 def _make_rest_factory(manager: SdwanManagerConfig) -> Callable[[], Rest]:
-    base_url, password, apikey, tenant = _connection_params(manager)
-    user = manager.user
-    timeout = manager.timeout
-
     def factory() -> Rest:
         return Rest(
-            base_url,
-            user,
-            password,
-            apikey=apikey,
-            tenant_name=tenant,
-            timeout=timeout,
+            manager_base_url(manager),
+            manager.user,
+            manager.password.get_secret_value() if manager.password else None,
+            apikey=manager.apikey.get_secret_value() if manager.apikey else None,
+            tenant_name=manager.tenant,
+            timeout=manager.timeout,
         )
 
     return factory
 
 
-def run_show_args(
-    args: ShowTaskArgs,
-    *,
-    output_format: Format = "text",
-    manager: str | None = None,
-) -> str:
+def run_show_args(args: ShowTaskArgs, *, output_format: Format = "text", manager: str | None = None) -> str:
     """
     Execute `sdwan show ...` via TaskShow.runner with validated Show*Args (Sastre SDK pattern).
 
-    `manager` selects which configured SD-WAN Manager to connect to by name;
-    when None, the configured default_manager is used.
+    `manager` selects which configured SD-WAN Manager to connect; when None, the configured default_manager is used.
     """
     cfg = get_config()
     try:
@@ -161,10 +135,7 @@ def run_show_args(
         # Full detail (incl. traceback) is logged server-side only; the client
         # receives a sanitized message plus a correlation id for support.
         logger.exception(
-            "show task failed [ref=%s] manager=%s output_format=%s",
-            correlation_id,
-            sdwan_manager.name,
-            output_format,
+            f"show task failed [ref={correlation_id}] manager={sdwan_manager.name} output_format={output_format}"
         )
         return f"Error: {_clean_error_message(exc)} (reference id: {correlation_id})"
 

@@ -98,14 +98,26 @@ def test_blank_apikey_falls_back_to_user_password_rule() -> None:
         SdwanManagerConfig.model_validate({"name": "p", "address": "10.0.0.1", "apikey": "   "})
 
 
-def test_port_coerced_from_int_to_string() -> None:
-    mgr = SdwanManagerConfig.model_validate(_manager(port=8443))
-    assert mgr.port == "8443"
+def test_port_coerced_from_str_to_int() -> None:
+    mgr = SdwanManagerConfig.model_validate(_manager(port="8443"))
+    assert mgr.port == 8443
 
 
 def test_port_whitespace_stripped() -> None:
     mgr = SdwanManagerConfig.model_validate(_manager(port="  443  "))
-    assert mgr.port == "443"
+    assert mgr.port == 443
+
+
+def test_port_out_of_range_rejected() -> None:
+    with pytest.raises(ValidationError):
+        SdwanManagerConfig.model_validate(_manager(port=0))
+    with pytest.raises(ValidationError):
+        SdwanManagerConfig.model_validate(_manager(port=70000))
+
+
+def test_port_non_numeric_rejected() -> None:
+    with pytest.raises(ValidationError):
+        SdwanManagerConfig.model_validate(_manager(port="https"))
 
 
 def test_empty_bearer_token_normalized_to_none() -> None:

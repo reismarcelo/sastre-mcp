@@ -48,7 +48,7 @@ Sensitive fields should use strong values and restrictive file permissions on `c
 
 #### Environment-variable indirection for secrets
 
-So that tokens and passwords need not sit in plaintext on disk, **any string value** in the config may reference an environment variable, which is expanded when the file is loaded:
+**Any string value** in the config may reference an environment variable, which is expanded when the file is loaded:
 
 - `${VAR}` — replaced with the value of `VAR`; **startup fails** with a clear error if `VAR` is unset (so a missing secret never silently becomes empty).
 - `${VAR:-default}` — replaced with `VAR` if set, otherwise the literal `default`.

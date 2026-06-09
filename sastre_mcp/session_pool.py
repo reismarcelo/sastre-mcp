@@ -1,40 +1,32 @@
 """Thread-safe, per-manager pooling of cisco_sdwan ``Rest`` sessions.
 
-``cisco_sdwan.Rest`` wraps a ``requests.Session``, which is not safe for
-concurrent use by multiple threads. Show tasks run in worker threads (via
-``asyncio.to_thread``), so a fresh ``Rest(...)`` per call would perform a full
-vManage login/logout on every request and, under load, could open an unbounded
-number of short-lived sessions against a single SD-WAN Manager.
+``cisco_sdwan.Rest`` wraps a ``requests.Session``, which is not safe for concurrent use by multiple threads.
+Show tasks run in worker threads (via ``asyncio.to_thread``), so a fresh ``Rest(...)`` per call would perform a full
+SDWAN Manager login/logout on every request and, under load, could open an unbounded number of short-lived sessions
+against a single SD-WAN Manager.
 
-This module keeps a small pool of reusable, logged-in sessions per manager. The
-pool:
-
-- bounds the number of concurrent sessions per manager (a ``BoundedSemaphore``
-  acts as a connection limiter so a burst of tool calls cannot open unbounded
-  vManage sessions),
+This module keeps a small pool of reusable, logged-in sessions per manager. The pool:
+- bounds the number of concurrent sessions per manager (a ``BoundedSemaphore`` acts as a connection limiter so a burst
+  of tool calls cannot open unbounded SDWAN Manager sessions),
 - reuses idle sessions to avoid a full login on every request,
-- evicts sessions that have been idle long enough to risk a server-side
-  session timeout, and
-- discards sessions on error instead of returning them to the pool, retrying a
-  reused session once with a fresh login when it appears stale.
+- evicts sessions that have been idle long enough to risk a server-side session timeout, and
+- discards sessions on error instead of returning them to the pool, retrying a reused session once with a fresh login
+  when it appears stale.
 
-A leased session is removed from the idle set for the duration of the call and
-only returned afterwards, so a given ``Rest`` is never used by two threads at
-once.
+A leased session is removed from the idle set for the duration of the call and only returned afterward,
+so a given ``Rest`` is never used by two threads at once.
 """
 
 import logging
 import threading
 import time
-from collections.abc import Callable
-from typing import TypeVar
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 import requests
 from cisco_sdwan.base.rest_api import Rest, RestAPIException
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 # A reused (pooled) session may have expired server-side; these errors trigger a
 # single retry with a freshly created session. Show tasks are read-only, so the
@@ -94,6 +86,7 @@ class ManagerSessionPool:
         """Return a reusable idle session, discarding any that are too stale."""
         now = time.monotonic()
         stale: list[Rest] = []
+        rest: Rest | None = None
         with self._lock:
             while self._idle:
                 pooled = self._idle.pop()
@@ -102,8 +95,6 @@ class ManagerSessionPool:
                     continue
                 rest = pooled.rest
                 break
-            else:
-                rest = None
         # Close evicted sessions outside the lock (network I/O).
         for old in stale:
             _safe_close(old)
@@ -113,40 +104,48 @@ class ManagerSessionPool:
         with self._lock:
             self._idle.append(_PooledSession(rest))
 
-    def run(self, operation: Callable[[Rest], T]) -> T:
-        """Run ``operation`` with a pooled (or fresh) session, bounding concurrency."""
+    @contextmanager
+    def _slot(self) -> Iterator[None]:
+        """Bound concurrency: acquire a connection slot or time out; release on exit."""
         if not self._semaphore.acquire(timeout=self.acquire_timeout_secs):
             raise SessionPoolTimeout(
                 f"No available session to manager '{self.name}' within {self.acquire_timeout_secs}s"
             )
-        rest: Rest | None = None
         try:
-            rest = self._pop_idle()
-            if rest is not None:
-                try:
-                    result = operation(rest)
-                except _STALE_SESSION_ERRORS as exc:
-                    logger.debug(
-                        "pooled session to '%s' failed (%s); retrying with a fresh session",
-                        self.name,
-                        type(exc).__name__,
-                    )
-                    _safe_close(rest)
-                    rest = None
-                    rest = self._factory()
-                    result = operation(rest)
-            else:
-                rest = self._factory()
-                result = operation(rest)
-        except BaseException:
-            if rest is not None:
-                _safe_close(rest)
-            raise
-        else:
-            self._return_idle(rest)
-            return result
+            yield
         finally:
             self._semaphore.release()
+
+    def run[T](self, operation: Callable[[Rest], T]) -> T:
+        """Run ``operation`` with a pooled (or fresh) session, bounding concurrency."""
+        with self._slot():
+            rest: Rest | None = None
+            try:
+                rest = self._pop_idle()
+                if rest is not None:
+                    try:
+                        result = operation(rest)
+                    except _STALE_SESSION_ERRORS as exc:
+                        logger.debug(
+                            f"pooled session to '{self.name}' failed ({type(exc).__name__}); "
+                            "retrying with a fresh session"
+                        )
+                        # Drop the stale session before building its replacement so a
+                        # failing login here cannot cause a double close below.
+                        _safe_close(rest)
+                        rest = None
+                        rest = self._factory()
+                        result = operation(rest)
+                else:
+                    rest = self._factory()
+                    result = operation(rest)
+            except BaseException:
+                if rest is not None:
+                    _safe_close(rest)
+                raise
+            else:
+                self._return_idle(rest)
+                return result
 
     def close_all(self) -> None:
         """Close every idle session. Leased sessions close themselves on return."""
