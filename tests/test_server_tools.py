@@ -16,7 +16,7 @@ from sastre_mcp.config import default_test_config
 
 @pytest.fixture
 def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Patch run_show_args so tools resolve without contacting a manager."""
+    """Patch run_show_args / run_list_args so tools resolve without contacting a manager."""
     record: dict[str, Any] = {}
 
     def fake_run_show_args(
@@ -27,7 +27,26 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         record["manager"] = manager
         return f"OK:{type(args).__name__}"
 
+    def fake_run_list_args(
+        args: Any, *, output_format: str = "text", manager: str | None = None
+    ) -> str:
+        record["args_type"] = type(args).__name__
+        record["output_format"] = output_format
+        record["manager"] = manager
+        return f"OK:{type(args).__name__}"
+
+    def fake_run_show_template_args(
+        args: Any, *, output_format: str = "text", manager: str | None = None
+    ) -> str:
+        record["args"] = args
+        record["args_type"] = type(args).__name__
+        record["output_format"] = output_format
+        record["manager"] = manager
+        return f"OK:{type(args).__name__}"
+
     monkeypatch.setattr(srv, "run_show_args", fake_run_show_args)
+    monkeypatch.setattr(srv, "run_list_args", fake_run_list_args)
+    monkeypatch.setattr(srv, "run_show_template_args", fake_run_show_template_args)
     return record
 
 
@@ -80,6 +99,43 @@ def test_show_events_tool(captured: dict[str, Any]) -> None:
     assert out == "OK:ShowEventsArgs"
 
 
+def test_show_template_values_tool(captured: dict[str, Any]) -> None:
+    out = _result_text(
+        _call("show_template_values", {"templates": "branch", "manager": "primary"})
+    )
+    assert out == "OK:ShowTemplateValuesArgs"
+    assert captured["args_type"] == "ShowTemplateValuesArgs"
+    assert captured["manager"] == "primary"
+
+
+def test_show_template_references_tool(captured: dict[str, Any]) -> None:
+    out = _result_text(
+        _call(
+            "show_template_references",
+            {"with_refs": True, "filled_rows": True, "output_format": "json"},
+        )
+    )
+    assert out == "OK:ShowTemplateRefArgs"
+    assert captured["args_type"] == "ShowTemplateRefArgs"
+    assert captured["output_format"] == "json"
+
+
+def test_show_template_references_json_forces_filled_rows(captured: dict[str, Any]) -> None:
+    out = _result_text(
+        _call("show_template_references", {"output_format": "json"})
+    )
+    assert out == "OK:ShowTemplateRefArgs"
+    assert captured["args"].filled_rows is True
+
+
+def test_show_template_references_text_preserves_filled_rows(captured: dict[str, Any]) -> None:
+    out = _result_text(
+        _call("show_template_references", {"output_format": "text"})
+    )
+    assert out == "OK:ShowTemplateRefArgs"
+    assert captured["args"].filled_rows is False
+
+
 def test_list_sdwan_managers_tool() -> None:
     out = _result_text(_call("list_sdwan_managers", {}))
     assert "primary" in out
@@ -91,6 +147,57 @@ def test_list_show_operational_commands_tool() -> None:
     assert "realtime" in out
     assert "state" in out
     assert "statistics" in out
+
+
+def test_list_configuration_tool(captured: dict[str, Any]) -> None:
+    out = _result_text(
+        _call("list_configuration", {"tags": ["template_device"], "manager": "primary"})
+    )
+    assert out == "OK:ListConfigArgs"
+    assert captured["args_type"] == "ListConfigArgs"
+    assert captured["manager"] == "primary"
+
+
+def test_list_configuration_empty_tags_rejected(captured: dict[str, Any]) -> None:
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    with pytest.raises(ToolError, match="At least one tag is required"):
+        _call("list_configuration", {"tags": []})
+
+
+def test_list_certificates_tool(captured: dict[str, Any]) -> None:
+    out = _result_text(_call("list_certificates", {"output_format": "json"}))
+    assert out == "OK:ListCertificateArgs"
+    assert captured["args_type"] == "ListCertificateArgs"
+    assert captured["output_format"] == "json"
+
+
+def test_list_configuration_tags_tool() -> None:
+    out = _result_text(_call("list_configuration_tags", {}))
+    assert "template_device" in out
+    assert "all" in out
+
+
+def test_build_invalid_configuration_tag_clean_error() -> None:
+    from cisco_sdwan.tasks.implementation import ListConfigArgs
+
+    with pytest.raises(ValueError, match="not a valid tag"):
+        srv._build(ListConfigArgs, tags=["not-a-real-tag-xyz"])
+
+
+def test_build_template_values_valid() -> None:
+    from cisco_sdwan.tasks.implementation import ShowTemplateValuesArgs
+
+    args = srv._build(ShowTemplateValuesArgs, templates="branch")
+    assert isinstance(args, ShowTemplateValuesArgs)
+    assert args.templates == "branch"
+
+
+def test_build_template_references_invalid_regex_clean_error() -> None:
+    from cisco_sdwan.tasks.implementation import ShowTemplateRefArgs
+
+    with pytest.raises(ValueError, match="regular expression"):
+        srv._build(ShowTemplateRefArgs, templates="[")
 
 
 def test_build_devices_valid() -> None:

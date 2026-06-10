@@ -86,9 +86,55 @@ The server logs to the console and to a rotating file. The configuration is stat
 
 If the log file's directory cannot be created or the file is not writable (e.g. a `--read-only` container or a non-writable working directory), file logging is skipped and the server logs to the console only instead of failing to start.
 
-## Cursor
+## Connecting MCP clients
 
-Add an MCP server entry of type **HTTP** (streamable) pointing at your base URL, e.g. `http://127.0.0.1:8765/mcp`, and configure the header `Authorization: Bearer <mcp.bearer_token>` when a token is set in config.
+This is a streamable **HTTP** MCP server, so any client that supports the HTTP transport can connect. Point the client at your MCP endpoint (default `http://127.0.0.1:8765/mcp`) and, when `mcp.bearer_token` is set in `config.yaml`, send an `Authorization: Bearer <mcp.bearer_token>` header. Start the server (`python3 -m sastre_mcp`) before connecting.
+
+Replace `<mcp.bearer_token>` below with the token from your `config.yaml`. If no token is configured (local, loopback-only use), omit the `Authorization` header / `headers` block entirely.
+
+### Cursor
+
+Add an HTTP MCP server entry to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` in the project root:
+
+```json
+{
+  "mcpServers": {
+    "sastre-mcp": {
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer <mcp.bearer_token>"
+      }
+    }
+  }
+}
+```
+
+Then enable the server under **Cursor Settings → MCP & Integrations**.
+
+### Claude Code
+
+Add the server with the `claude` CLI, using the HTTP transport:
+
+```bash
+claude mcp add --transport http sastre-mcp http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer <mcp.bearer_token>"
+```
+
+This writes the server into your Claude Code configuration. Verify it with `claude mcp list`, or check the connection from inside a session with `/mcp`. Equivalently, add it to a project-scoped `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "sastre-mcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer <mcp.bearer_token>"
+      }
+    }
+  }
+}
+```
 
 ## Tools
 
@@ -97,12 +143,17 @@ Add an MCP server entry of type **HTTP** (streamable) pointing at your base URL,
 - `show_state` — bulk state
 - `show_statistics` — statistics (optional `days` / `hours`)
 - `show_alarms` / `show_events` — manager alarms and events
+- `show_template_values` — per-device variable values from device-template attachments
+- `show_template_references` — how device templates reference feature templates
+- `list_configuration` — configuration items stored on the manager (`tags` list selects item groups)
+- `list_certificates` — WAN edge device certificate information
 - `list_sdwan_managers` — list configured managers and the default
 - `list_show_operational_commands` — catalog help for command tokens
+- `list_configuration_tags` — catalog help for `list_configuration` `tags` values
 
 Optional `output_format`: `text` (default) or `json` per tool.
 
-**Selecting a manager:** Every show tool accepts an optional `manager` argument naming one of the configured `sdwan_managers`. Omit it to use `default_manager`. Call `list_sdwan_managers` to see the available names.
+**Selecting a manager:** Every show/list tool accepts an optional `manager` argument naming one of the configured `sdwan_managers`. Omit it to use `default_manager`. Call `list_sdwan_managers` to see the available names.
 
 ## Security notes
 
