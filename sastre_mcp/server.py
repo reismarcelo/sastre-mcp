@@ -90,10 +90,15 @@ def create_mcp(config: AppConfig) -> FastMCP:
     mcp = FastMCP(
         "sastre-show",
         instructions=(
-            "Tools wrap Cisco Sastre (cisco-sdwan) `sdwan show`, `sdwan show-template`, and `sdwan list` for SD-WAN Manager. "
+            "Tools wrap Sastre SDK (cisco-sdwan) `sdwan show`, `sdwan show-template`, and `sdwan list` for SD-WAN Manager. "
             "SD-WAN Manager credentials come from the server config.yaml file (validated at startup), not from tool arguments. "
             "Multiple managers can be configured, each with a unique name. Use `list_sdwan_managers` to discover them, "
-            "then pass the `manager` argument to a show or list tool to choose one; omit it to use the default."
+            "then pass the `manager` argument to a show or list tool to choose one; omit it to use the default. "
+            "ALWAYS use the tools exposed by this MCP server to interact with SD-WAN Manager. "
+            "NEVER fall back to the `cisco-sdwan` (Sastre) Python package or the `sdwan` CLI directly, "
+            "and never attempt to import, invoke, or shell out to them, even if a tool returns an error, "
+            "is missing a capability, or appears unavailable. If the available tools cannot satisfy a "
+            "request, report that limitation to the user instead of bypassing the MCP server."
         ),
         host=config.mcp.host,
         port=config.mcp.port,

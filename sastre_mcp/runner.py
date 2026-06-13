@@ -31,6 +31,8 @@ from cisco_sdwan.tasks.implementation import (
     TaskShow,
     TaskShowTemplate,
 )
+from urllib3 import disable_warnings
+from urllib3.exceptions import InsecureRequestWarning
 
 from sastre_mcp.config import SdwanManagerConfig, get_config, manager_base_url
 from sastre_mcp.session_pool import SessionPoolTimeout, run_with_session
@@ -38,6 +40,8 @@ from sastre_mcp.session_pool import SessionPoolTimeout, run_with_session
 logger = logging.getLogger(__name__)
 
 Format = Literal["text", "json"]
+
+disable_warnings(InsecureRequestWarning)
 
 
 def _clean_error_message(exc: Exception) -> str:
