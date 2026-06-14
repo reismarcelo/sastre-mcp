@@ -142,6 +142,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             exclude: Drop table rows matching this regex.
 
         output_format: "text" for human-readable tables (default) or "json" for structured output.
+            Prefer "text" unless a caller specifically needs to parse the result: it is more compact
+            and consumes less of the context window than the equivalent "json".
         manager: Name of the configured SD-WAN Manager to query. Omit to use the default.
             Use `list_sdwan_managers` to see the available names.
 
@@ -183,11 +185,14 @@ def create_mcp(config: AppConfig) -> FastMCP:
         `show_state` (synced, near-real-time) or `show_statistics` (historical) when they expose an
         equivalent command. Narrow the device set with the filters below to keep queries fast.
 
-        cmd (required): One or more realtime operational commands to run, e.g. ["app-route", "stats"]
-            or a command group, or the group "all" to run every command in a category. Command and
-            group names are validated; invalid values are rejected. Call
-            `list_show_operational_commands` first to get the exact valid realtime groups/commands.
-            Commands not applicable to a selected device's model are skipped automatically.
+        cmd (required): The TOKENS of a SINGLE realtime command line (joined with spaces), e.g. the
+            command "app-route stats" is passed as ["app-route", "stats"]. Provide EITHER a single
+            group name (one token, e.g. ["app-route"]) or the group "all" to run every command in the
+            category, OR the tokens of one full command (e.g. ["app-route", "stats"]); never a group
+            combined with a command. Command and group names are validated; invalid values are
+            rejected. Call `list_show_operational_commands` first to get the exact valid realtime
+            groups/commands. Commands not applicable to a selected device's model are skipped
+            automatically.
 
         Device-selection filters (all optional; combined with logical AND):
             regex: Select only devices whose hostname OR model matches this Python regex (substring
@@ -204,7 +209,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             simple: Return fewer columns (condensed output). Mutually exclusive with `detail`.
             include: Keep only table rows matching this regex; drop all others.
             exclude: Drop table rows matching this regex.
-            output_format: "text" (default) or "json".
+            output_format: "text" (default; preferred, as it is more compact and uses less of the
+                context window than "json") or "json".
             manager: Configured SD-WAN Manager name; omit for the default. See `list_sdwan_managers`.
 
         Returns the formatted result, or an "Error: ..." string on failure (with a reference id).
@@ -247,9 +253,12 @@ def create_mcp(config: AppConfig) -> FastMCP:
         (retrieved in bulk from the Manager rather than polling each device). Prefer this over
         `show_realtime` whenever an equivalent state command exists.
 
-        cmd (required): One or more state operational commands, or a command group, or the group
-            "all" for every command in a category. Names are validated and invalid values are
-            rejected; call `list_show_operational_commands` for the exact valid state groups/commands.
+        cmd (required): The TOKENS of a SINGLE state command line (joined with spaces), e.g. the
+            command "control connections" is passed as ["control", "connections"]. Provide EITHER a
+            single group name (one token, e.g. ["control"]) or the group "all" for every command in
+            the category, OR the tokens of one full command (e.g. ["control", "connections"]); never a
+            group combined with a command. Names are validated and invalid values are rejected; call
+            `list_show_operational_commands` for the exact valid state groups/commands.
 
         Device-selection filters (all optional; combined with logical AND):
             regex: Select devices whose hostname OR model matches this regex. Mutually exclusive
@@ -266,7 +275,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             simple: Return fewer columns. Mutually exclusive with `detail`.
             include: Keep only table rows matching this regex; drop all others.
             exclude: Drop table rows matching this regex.
-            output_format: "text" (default) or "json".
+            output_format: "text" (default; preferred, as it is more compact and uses less of the
+                context window than "json") or "json".
             manager: Configured SD-WAN Manager name; omit for the default. See `list_sdwan_managers`.
 
         Returns the formatted result, or an "Error: ..." string on failure (with a reference id).
@@ -312,8 +322,11 @@ def create_mcp(config: AppConfig) -> FastMCP:
         and `hours`. Values are averaged over a 5-minute window within a 2-hour query range that ends
         at the requested point in time; with `days=0` and `hours=0` the range is the most recent 2 hours.
 
-        cmd (required): One or more statistics commands, or a command group, or the group "all" for
-            every command in a category. Names are validated and invalid values are rejected; call
+        cmd (required): The TOKENS of a SINGLE statistics command line (joined with spaces), e.g. the
+            command "app-route stats" is passed as ["app-route", "stats"]. Provide EITHER a single
+            group name (one token, e.g. ["app-route"]) or the group "all" for every command in the
+            category, OR the tokens of one full command (e.g. ["app-route", "stats"]); never a group
+            combined with a command. Names are validated and invalid values are rejected; call
             `list_show_operational_commands` for the exact valid statistics groups/commands.
 
         Time window (for historical queries; both default to 0 = now):
@@ -336,7 +349,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             simple: Return fewer columns. Mutually exclusive with `detail`.
             include: Keep only table rows matching this regex; drop all others.
             exclude: Drop table rows matching this regex.
-            output_format: "text" (default) or "json".
+            output_format: "text" (default; preferred, as it is more compact and uses less of the
+                context window than "json") or "json".
             manager: Configured SD-WAN Manager name; omit for the default. See `list_sdwan_managers`.
 
         Returns the formatted result, or an "Error: ..." string on failure (with a reference id).
@@ -387,7 +401,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             simple: Return fewer columns. Mutually exclusive with `detail`.
             include: Keep only table rows matching this regex; drop all others.
             exclude: Drop table rows matching this regex.
-            output_format: "text" (default) or "json".
+            output_format: "text" (default; preferred, as it is more compact and uses less of the
+                context window than "json") or "json".
             manager: Configured SD-WAN Manager name; omit for the default. See `list_sdwan_managers`.
 
         Returns the formatted result, or an "Error: ..." string on failure (with a reference id).
@@ -432,7 +447,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             simple: Return fewer columns. Mutually exclusive with `detail`.
             include: Keep only table rows matching this regex; drop all others.
             exclude: Drop table rows matching this regex.
-            output_format: "text" (default) or "json".
+            output_format: "text" (default; preferred, as it is more compact and uses less of the
+                context window than "json") or "json".
             manager: Configured SD-WAN Manager name; omit for the default. See `list_sdwan_managers`.
 
         Returns the formatted result, or an "Error: ..." string on failure (with a reference id).
@@ -474,6 +490,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             exclude: Drop table rows matching this regex.
 
         output_format: "text" for human-readable tables (default) or "json" for structured output.
+            Prefer "text" unless a caller specifically needs to parse the result: it is more compact
+            and consumes less of the context window than the equivalent "json".
         manager: Name of the configured SD-WAN Manager to query. Omit to use the default.
             Use `list_sdwan_managers` to see the available names.
 
@@ -523,6 +541,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             exclude: Drop table rows matching this regex.
 
         output_format: "text" for human-readable tables (default) or "json" for structured output.
+            Prefer "text" unless a caller specifically needs to parse the result: it is more compact
+            and consumes less of the context window than the equivalent "json".
         manager: Name of the configured SD-WAN Manager to query. Omit to use the default.
             Use `list_sdwan_managers` to see the available names.
 
@@ -566,6 +586,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             exclude: Drop table rows matching this regex.
 
         output_format: "text" for human-readable tables (default) or "json" for structured output.
+            Prefer "text" unless a caller specifically needs to parse the result: it is more compact
+            and consumes less of the context window than the equivalent "json".
         manager: Name of the configured SD-WAN Manager to query. Omit to use the default.
             Use `list_sdwan_managers` to see the available names.
 
@@ -605,6 +627,8 @@ def create_mcp(config: AppConfig) -> FastMCP:
             exclude: Drop table rows matching this regex.
 
         output_format: "text" for human-readable tables (default) or "json" for structured output.
+            Prefer "text" unless a caller specifically needs to parse the result: it is more compact
+            and consumes less of the context window than the equivalent "json".
         manager: Name of the configured SD-WAN Manager to query. Omit to use the default.
             Use `list_sdwan_managers` to see the available names.
 
@@ -636,8 +660,13 @@ def create_mcp(config: AppConfig) -> FastMCP:
         Takes no arguments. Returns, for each category (realtime, state, statistics), the available
         command GROUPS and individual COMMAND names, plus the special group "all" that selects every
         command in a category. Call this BEFORE `show_realtime`/`show_state`/`show_statistics` to pick
-        valid `cmd` values, since those tools reject unknown command or group names. Note the catalogs
-        differ per category: a command valid for one category may not exist in another.
+        valid `cmd` values, since those tools reject unknown command or group names.
+        `cmd` is the list of TOKENS of a SINGLE command line (the tokens are joined with spaces);
+        e.g. the command "control connections" is passed as ["control", "connections"]. It MUST be
+        EITHER a single group name (one token, e.g. ["control"], or "all") OR the tokens of one full
+        command (e.g. ["control", "connections"]), never a group combined with a command. When a
+        group name is used, every command in that group is retrieved.
+        Note the catalogs differ per category: a command valid for one category may not exist in another.
         """
         return await asyncio.to_thread(operational_commands_help)
 
