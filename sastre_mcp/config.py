@@ -15,9 +15,9 @@ _active: AppConfig | None = None
 def _expand_env_in_str(value: str) -> str:
     """Expand ${VAR} / ${VAR:-default} references using os.environ.
 
-    A literal ``$${`` sequence is treated as an escape and collapses to ``${`` without expansion, so values that
-    genuinely need ``${...}`` are still representable. References to unset variables without a default raise a
-    clear error so misconfiguration fails fast instead of silently injecting an empty secret.
+    A literal "$${" sequence is treated as an escape and collapses to "${" without expansion, so values that
+    genuinely need "${...}" are still representable. References to unset variables without a default raise a
+    clear error, so misconfiguration fails fast instead of silently injecting an empty secret.
     """
     placeholder = "\x00SASTRE_DOLLAR\x00"
     escaped = value.replace("$${", placeholder)
@@ -27,7 +27,7 @@ def _expand_env_in_str(value: str) -> str:
             return env_val
         if (default := match.group('default')) is not None:
             return default
-        raise RuntimeError(
+        raise ValueError(
             f"Config references environment variable '{match.group('name')}' (via ${{{match.group('name')}}}) "
             f"which is not set. Set the variable or provide a default with ${{{match.group('name')}:-default}}."
         )
