@@ -34,7 +34,19 @@ mcp:
   port: 8765
   bearer_token: "generate-a-long-random-secret"  # or e.g. "${MCP_BEARER_TOKEN}"
   stateless_http: true
+  # Browser origins allowed to call the endpoint. Empty disables CORS entirely. Listed
+  # origins are also accepted by the Host/Origin (DNS rebinding) check below.
   cors_origins: []
+  # Host header values the server accepts, to block DNS rebinding attacks. A loopback
+  # host (above) accepts 127.0.0.1 / localhost / [::1] on any port automatically, and a
+  # bind to a specific address accepts that address on any port, so this list only needs
+  # the names clients actually use — typically a reverse-proxy hostname. Entries match
+  # exactly, or use "host:*" for any port; note that a client reaching the server on
+  # 443/80 sends no port at all. REQUIRED when host is 0.0.0.0 or :: , since a wildcard
+  # bind says nothing about the hostnames in use. Use ["*"] to switch the check off,
+  # which is only safe when an upstream proxy validates Host itself.
+  # Example: ["mcp.example.com", "mcp.example.com:8765"]
+  allowed_hosts: []
   disable_rate_limit: false
 
 limits:

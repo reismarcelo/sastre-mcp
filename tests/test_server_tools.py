@@ -1,4 +1,4 @@
-"""Tool-level tests for the FastMCP server (no live SDWAN Manager).
+"""Tool-level tests for the MCPServer (no live SDWAN Manager).
 
 These call the registered MCP tools end-to-end (through ``call_tool``) with
 ``run_show_args`` patched out, exercising each tool body, the ``_run_show``
@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 from sastre_mcp import server as srv
-from sastre_mcp.config import default_test_config
 
 
 @pytest.fixture
@@ -51,13 +50,16 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 
 def _result_text(call_result: Any) -> str:
-    """Extract the string payload from a FastMCP call_tool return value."""
-    _blocks, structured = call_result
-    return structured["result"]
+    """Extract the string payload from an MCPServer call_tool return value."""
+    structured = call_result.structured_content
+    assert structured is not None
+    result = structured["result"]
+    assert isinstance(result, str)
+    return result
 
 
 def _call(tool: str, arguments: dict[str, Any]) -> Any:
-    mcp = srv.create_mcp(default_test_config())
+    mcp = srv.create_mcp()
     return asyncio.run(mcp.call_tool(tool, arguments))
 
 
@@ -100,9 +102,7 @@ def test_show_events_tool(captured: dict[str, Any]) -> None:
 
 
 def test_show_template_values_tool(captured: dict[str, Any]) -> None:
-    out = _result_text(
-        _call("show_template_values", {"templates": "branch", "manager": "primary"})
-    )
+    out = _result_text(_call("show_template_values", {"templates": "branch", "manager": "primary"}))
     assert out == "OK:ShowTemplateValuesArgs"
     assert captured["args_type"] == "ShowTemplateValuesArgs"
     assert captured["manager"] == "primary"
@@ -121,17 +121,13 @@ def test_show_template_references_tool(captured: dict[str, Any]) -> None:
 
 
 def test_show_template_references_json_forces_filled_rows(captured: dict[str, Any]) -> None:
-    out = _result_text(
-        _call("show_template_references", {"output_format": "json"})
-    )
+    out = _result_text(_call("show_template_references", {"output_format": "json"}))
     assert out == "OK:ShowTemplateRefArgs"
     assert captured["args"].filled_rows is True
 
 
 def test_show_template_references_text_preserves_filled_rows(captured: dict[str, Any]) -> None:
-    out = _result_text(
-        _call("show_template_references", {"output_format": "text"})
-    )
+    out = _result_text(_call("show_template_references", {"output_format": "text"}))
     assert out == "OK:ShowTemplateRefArgs"
     assert captured["args"].filled_rows is False
 
@@ -159,7 +155,7 @@ def test_list_configuration_tool(captured: dict[str, Any]) -> None:
 
 
 def test_list_configuration_empty_tags_rejected(captured: dict[str, Any]) -> None:
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
 
     with pytest.raises(ToolError, match="At least one tag is required"):
         _call("list_configuration", {"tags": []})

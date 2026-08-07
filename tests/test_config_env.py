@@ -33,6 +33,15 @@ def test_missing_env_var_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         load_config(_write_config(tmp_path, "${MISSING_PW}"))
 
 
+def test_missing_env_var_error_names_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MISSING_PW", raising=False)
+    path = _write_config(tmp_path, "${MISSING_PW}")
+    with pytest.raises(RuntimeError, match=str(path)):
+        load_config(path)
+
+
 def test_env_var_default_used_when_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPT_PW", raising=False)
     cfg = load_config(_write_config(tmp_path, "${OPT_PW:-fallback-pw}"))

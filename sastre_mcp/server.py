@@ -1,6 +1,7 @@
-"""FastMCP application: `sdwan show`, `sdwan list` and `sdwan show-template` tools."""
+"""MCPServer application: `sdwan show`, `sdwan list` and `sdwan show-template` tools."""
 
 import asyncio
+import ipaddress
 import logging
 from typing import Any, Literal
 
@@ -16,12 +17,19 @@ from cisco_sdwan.tasks.implementation import (
     ShowTemplateRefArgs,
     ShowTemplateValuesArgs,
 )
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ValidationError
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 
-from sastre_mcp.config import AppConfig
+from sastre_mcp.config import (
+    ALLOW_ANY_HOST,
+    LOOPBACK_BIND_HOSTS,
+    WILDCARD_BIND_HOSTS,
+    AppConfig,
+    McpConfig,
+)
 from sastre_mcp.middleware import (
     BearerTokenMiddleware,
     MaxBodySizeMiddleware,
@@ -39,7 +47,61 @@ from sastre_mcp.runner import (
     run_show_template_args,
 )
 
+from .__version__ import __version__ as server_version
+
 logger = logging.getLogger(__name__)
+
+_LOOPBACK_HOST_PATTERNS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+_LOOPBACK_ORIGIN_PATTERNS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+
+
+def _host_header_pattern(host: str) -> str:
+    """Render a bind address as a "any port" Host header pattern, bracketing IPv6 literals."""
+    try:
+        bracketed = ipaddress.ip_address(host).version == 6
+    except ValueError:
+        bracketed = False
+    return f"[{host}]:*" if bracketed else f"{host}:*"
+
+
+def _transport_security(mcp_config: McpConfig) -> TransportSecuritySettings:
+    """Build the DNS-rebinding protection settings for the configured bind address.
+
+    The SDK only auto-enables Host/Origin validation for loopback binds, leaving it off for exactly
+    the remote deployments that need it. Protection is therefore always enabled here, with the
+    allowlist derived from the bind address plus ``mcp.allowed_hosts``.
+
+    ``mcp.cors_origins`` feeds ``allowed_origins`` as well: without that, the CORS middleware would
+    answer the preflight for a configured origin while the transport rejected the request that
+    followed. A browser client that sends no ``Origin`` at all is unaffected, since the transport
+    treats an absent ``Origin`` as same-origin.
+    """
+    if ALLOW_ANY_HOST in mcp_config.allowed_hosts:
+        logger.warning(
+            "mcp.allowed_hosts contains '*'; Host/Origin validation (DNS rebinding protection) is "
+            "disabled. Only use this behind a proxy that validates the Host header itself."
+        )
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    allowed_hosts = list(mcp_config.allowed_hosts)
+    allowed_origins = list(mcp_config.cors_origins)
+    if mcp_config.host in LOOPBACK_BIND_HOSTS:
+        allowed_hosts += _LOOPBACK_HOST_PATTERNS
+        allowed_origins += _LOOPBACK_ORIGIN_PATTERNS
+    elif mcp_config.host not in WILDCARD_BIND_HOSTS:
+        allowed_hosts.append(_host_header_pattern(mcp_config.host))
+
+    if ALLOW_ANY_HOST in allowed_origins:
+        logger.warning(
+            "mcp.cors_origins contains '*', which Host/Origin validation cannot express; browser "
+            "requests carrying an Origin header will be rejected. List explicit origins instead."
+        )
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
 
 
 def _build[ModelT: BaseModel](model_cls: type[ModelT], /, **fields: Any) -> ModelT:
@@ -59,18 +121,22 @@ def _build[ModelT: BaseModel](model_cls: type[ModelT], /, **fields: Any) -> Mode
         err = exc.errors()[0]
         msg = err.get("msg", str(exc))
         if msg.startswith("Value error, "):
-            msg = msg[len("Value error, "):]
+            msg = msg[len("Value error, ") :]
         raise ValueError(msg) from exc
 
 
-async def _run_show(args: ShowTaskArgs, output_format: Literal["text", "json"], manager: str | None) -> str:
+async def _run_show(
+    args: ShowTaskArgs, output_format: Literal["text", "json"], manager: str | None
+) -> str:
     """Run a blocking show task in a worker thread (the SDK is synchronous)."""
     return await asyncio.to_thread(
         run_show_args, args, output_format=output_format, manager=manager
     )
 
 
-async def _run_list(args: ListTaskArgs, output_format: Literal["text", "json"], manager: str | None) -> str:
+async def _run_list(
+    args: ListTaskArgs, output_format: Literal["text", "json"], manager: str | None
+) -> str:
     """Run a blocking list task in a worker thread (the SDK is synchronous)."""
     return await asyncio.to_thread(
         run_list_args, args, output_format=output_format, manager=manager
@@ -86,24 +152,22 @@ async def _run_show_template(
     )
 
 
-def create_mcp(config: AppConfig) -> FastMCP:
-    mcp = FastMCP(
-        "sastre-show",
+def create_mcp() -> MCPServer:
+    mcp = MCPServer(
+        "sastre-mcp",
+        version=server_version,
         instructions=(
-            "Tools wrap Sastre SDK (cisco-sdwan) `sdwan show`, `sdwan show-template`, and `sdwan list` for SD-WAN Manager. "
-            "SD-WAN Manager credentials come from the server config.yaml file (validated at startup), not from tool arguments. "
+            "Tools wrap Sastre SDK (cisco-sdwan) `sdwan show`, `sdwan show-template`, and `sdwan list` commands. "
+            "SD-WAN Manager credentials come from the server config.yaml file, not from tool arguments. "
             "Multiple managers can be configured, each with a unique name. Use `list_sdwan_managers` to discover them, "
-            "then pass the `manager` argument to a show or list tool to choose one; omit it to use the default. "
+            "then pass the `manager` argument to a show or list tool to choose one; omit it to use the default SD-WAN "
+            "Manager. "
             "ALWAYS use the tools exposed by this MCP server to interact with SD-WAN Manager. "
-            "NEVER fall back to the `cisco-sdwan` (Sastre) Python package or the `sdwan` CLI directly, "
-            "and never attempt to import, invoke, or shell out to them, even if a tool returns an error, "
-            "is missing a capability, or appears unavailable. If the available tools cannot satisfy a "
-            "request, report that limitation to the user instead of bypassing the MCP server."
+            "NEVER fall back to the `cisco-sdwan` (Sastre) Python package or the `sdwan` CLI directly. "
+            "NEVER attempt to import, invoke, or shell out to them, even if a tool returns an error, is missing a "
+            "capability, or appears unavailable. If the available tools cannot satisfy a request, report that "
+            "limitation to the user instead of bypassing the MCP server."
         ),
-        host=config.mcp.host,
-        port=config.mcp.port,
-        streamable_http_path="/mcp",
-        stateless_http=config.mcp.stateless_http,
     )
 
     @mcp.tool()
@@ -594,7 +658,9 @@ def create_mcp(config: AppConfig) -> FastMCP:
         Returns the formatted result, or an "Error: ..." string on failure (with a reference id).
         """
         if not tags:
-            raise ValueError("At least one tag is required; call `list_configuration_tags` for valid values.")
+            raise ValueError(
+                "At least one tag is required; call `list_configuration_tags` for valid values."
+            )
         args = _build(
             ListConfigArgs,
             tags=tags,
@@ -685,16 +751,21 @@ def create_mcp(config: AppConfig) -> FastMCP:
 
 def build_http_app(config: AppConfig) -> Starlette:
     """Starlette app with streamable HTTP MCP and hardening middleware."""
-    mcp = create_mcp(config)
-    app: Starlette = mcp.streamable_http_app()
+    mcp = create_mcp()
+    app: Starlette = mcp.streamable_http_app(
+        streamable_http_path="/mcp",
+        stateless_http=config.mcp.stateless_http,
+        transport_security=_transport_security(config.mcp),
+        # The transport always installs its own body limit, defaulting to 4 MiB. Leaving it unset would silently reject
+        # bodies between 4 MiB and a larger configured max_body_bytes. Below 4 MiB the outer MaxBodySizeMiddleware
+        # rejects first.
+        max_request_body_size=config.limits.max_body_bytes,
+    )
 
-    token_secret = config.mcp.bearer_token
-    token = token_secret.get_secret_value() if token_secret else None
-    host = config.mcp.host
-
+    token = config.mcp.bearer_token.get_secret_value() if config.mcp.bearer_token else None
     if token:
         app.add_middleware(BearerTokenMiddleware, expected_token=token)
-    elif host not in ("127.0.0.1", "localhost", "::1"):
+    elif config.mcp.host not in LOOPBACK_BIND_HOSTS:
         logger.warning(
             "mcp.bearer_token is not set and host is not loopback; strongly set a bearer token for remote binds."
         )

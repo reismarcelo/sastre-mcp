@@ -35,10 +35,10 @@ MCP endpoint (default): `http://127.0.0.1:8765/mcp` (use HTTPS behind a reverse 
 |---------|---------|
 | `sdwan_managers` | List of SD-WAN Managers. Each entry needs a unique `name` plus host, port, auth (`user`/`password` or `apikey`), optional `tenant`, `timeout` (1–3600 s) |
 | `default_manager` | Optional; name of the manager used when a tool call omits `manager`. Defaults to the first entry |
-| `mcp` | HTTP bind `host`/`port`, optional `bearer_token`, `stateless_http`, `cors_origins` (list; empty disables CORS), `disable_rate_limit` (testing) |
+| `mcp` | HTTP bind `host`/`port`, optional `bearer_token`, `stateless_http`, `cors_origins` (list; empty disables CORS), `allowed_hosts` (see below), `disable_rate_limit` (testing) |
 | `limits` | Input and DoS caps (regex length, body size, rate limit window, etc.); optional — defaults match the previous hard-coded values |
 
-**Bind rule:** If `mcp.host` is `0.0.0.0` or `::`, `mcp.bearer_token` is **required** (enforced when the file is validated).
+**Bind rule:** If `mcp.host` is `0.0.0.0` or `::`, `mcp.bearer_token` and `mcp.allowed_hosts` are both **required** (enforced when the file is validated).
 
 **Auth rule:** For each manager, if `apikey` is not set (or empty), `user` and `password` are required.
 
@@ -163,6 +163,18 @@ Optional `output_format`: `text` (default) or `json` per tool.
 
 See [`SECURITY.md`](SECURITY.md) for deployment hardening guidance and how to report vulnerabilities.
 
+### Host and Origin validation (DNS rebinding)
+
+Every request's `Host` header must match `mcp.allowed_hosts`, and any `Origin` header must match `mcp.cors_origins`. This blocks DNS rebinding, where a page the user visits resolves an attacker-controlled name to your bind address and then talks to the MCP endpoint from the browser.
+
+- **Loopback bind** (`127.0.0.1`, `localhost`, `::1`): `127.0.0.1`, `localhost`, and `[::1]` on any port are accepted automatically, so no configuration is needed for local use.
+- **Specific address bind** (e.g. `10.0.0.5`): that address on any port is accepted automatically. Add the hostnames clients actually use, such as the name on your reverse proxy.
+- **Wildcard bind** (`0.0.0.0`, `::`): `mcp.allowed_hosts` is required, because the bind address says nothing about the hostnames in use.
+
+Entries are matched exactly, or as `host:*` to accept any port. A client reaching the server over standard 443/80 sends no port in `Host`, so list the bare hostname for that case. Setting `mcp.allowed_hosts: ["*"]` turns the check off; only do that behind a proxy that validates `Host` itself.
+
+Requests with no `Origin` header (ordinary MCP clients, `curl`) are unaffected — the check applies to browsers, which always send one. If you serve a browser client, its origin must be in `mcp.cors_origins`.
+
 ### Rate limiting
 
 A per-client-IP fixed-window limit is enabled by default (`limits.rate_limit_window_secs` / `limits.rate_limit_max_requests`; disable with `mcp.disable_rate_limit`).
@@ -186,8 +198,9 @@ A [`Dockerfile`](Dockerfile) builds a minimal image that runs as a non-root user
 docker build -t sastre-mcp .
 
 # Mount config.yaml read-only and supply secrets via the environment.
-# Set mcp.host to 0.0.0.0 in config.yaml so the server is reachable from outside
-# the container (which requires mcp.bearer_token to be set).
+# Set mcp.host to 0.0.0.0 in config.yaml so the server is reachable from outside the
+# container. That requires mcp.bearer_token, plus mcp.allowed_hosts listing the names
+# clients connect to (e.g. ["localhost:*", "127.0.0.1:*"] for the published port below).
 docker run --rm -p 8765:8765 \
   -v "$PWD/config.yaml:/app/config.yaml:ro" \
   -e MCP_BEARER_TOKEN='...' \

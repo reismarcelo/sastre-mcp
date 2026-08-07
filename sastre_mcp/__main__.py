@@ -85,9 +85,11 @@ def main() -> None:
     configure_logging(Path("logs/sastre-mcp.log").resolve())
     try:
         cfg = load_config((Path.cwd() / "config.yaml").resolve())
-    except ValueError as ex:
-        logging.getLogger(__name__).error(f'Invalid configuration: {ex}')
-        return
+    except RuntimeError as ex:
+        # Exit non-zero so process supervisors and container restart policies see a failed start
+        # rather than a clean shutdown.
+        logging.getLogger(__name__).error(f"Startup failed: {ex}")
+        sys.exit(1)
 
     set_active_config(cfg)
 
@@ -110,8 +112,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except RuntimeError as exc:
-        print(str(exc), file=sys.stderr)
-        sys.exit(1)
+    main()

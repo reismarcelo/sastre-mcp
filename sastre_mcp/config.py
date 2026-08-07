@@ -23,9 +23,9 @@ def _expand_env_in_str(value: str) -> str:
     escaped = value.replace("$${", placeholder)
 
     def replace(match: re.Match[str]) -> str:
-        if (env_val := os.environ.get(match.group('name'))) is not None:
+        if (env_val := os.environ.get(match.group("name"))) is not None:
             return env_val
-        if (default := match.group('default')) is not None:
+        if (default := match.group("default")) is not None:
             return default
         raise ValueError(
             f"Config references environment variable '{match.group('name')}' (via ${{{match.group('name')}}}) "
@@ -96,10 +96,20 @@ class SdwanManagerConfig(BaseModel):
         if self.apikey is not None and self.apikey.get_secret_value().strip() != "":
             return self
         if not self.user or not self.password:
-            raise ValueError(f"sdwan_manager {self.name}: user and password are required when apikey is not set")
+            raise ValueError(
+                f"sdwan_manager {self.name}: user and password are required when apikey is not set"
+            )
         if self.password.get_secret_value().strip() == "":
-            raise ValueError(f"sdwan_manager {self.name}: password must be non-empty when using user/password auth")
+            raise ValueError(
+                f"sdwan_manager {self.name}: password must be non-empty when using user/password auth"
+            )
         return self
+
+
+WILDCARD_BIND_HOSTS = ("0.0.0.0", "::")
+LOOPBACK_BIND_HOSTS = ("127.0.0.1", "localhost", "::1")
+# Sentinel in mcp.allowed_hosts that turns off Host/Origin validation entirely.
+ALLOW_ANY_HOST = "*"
 
 
 class McpConfig(BaseModel):
@@ -110,12 +120,32 @@ class McpConfig(BaseModel):
     bearer_token: SecretStr | None = None
     stateless_http: bool = True
     cors_origins: list[str] = Field(default_factory=list)
+    # Host header values accepted by the transport's DNS-rebinding protection. Entries are matched
+    # exactly, or as a "host:*" prefix pattern to accept any port. A loopback bind and any bind to a
+    # specific address contribute their own patterns automatically, so this is only needed for the
+    # hostnames clients actually use (typically a reverse-proxy name) and for wildcard binds. A single
+    # ALLOW_ANY_HOST entry disables the check, which is only safe behind a proxy that validates Host.
+    allowed_hosts: list[str] = Field(default_factory=list)
     disable_rate_limit: bool = False
 
     @model_validator(mode="after")
     def empty_bearer_as_none(self) -> Self:
         if self.bearer_token is not None and self.bearer_token.get_secret_value().strip() == "":
             return self.model_copy(update={"bearer_token": None})
+        return self
+
+    @model_validator(mode="after")
+    def validate_allowed_hosts(self) -> Self:
+        for entry in self.allowed_hosts:
+            if entry == ALLOW_ANY_HOST:
+                continue
+            if not entry.strip():
+                raise ValueError("allowed_hosts entries must be non-empty")
+            if "://" in entry or "/" in entry:
+                raise ValueError(
+                    f"allowed_hosts entry '{entry}' must be a Host header value such as "
+                    f"'mcp.example.com' or 'mcp.example.com:*', not a URL"
+                )
         return self
 
 
@@ -132,7 +162,9 @@ class AppConfig(BaseModel):
         names = [m.name for m in self.sdwan_managers]
         duplicates = sorted({n for n in names if names.count(n) > 1})
         if duplicates:
-            raise ValueError(f"sdwan_managers names must be unique; duplicates: {', '.join(duplicates)}")
+            raise ValueError(
+                f"sdwan_managers names must be unique; duplicates: {', '.join(duplicates)}"
+            )
         if self.default_manager is None:
             return self.model_copy(update={"default_manager": names[0]})
         if self.default_manager not in names:
@@ -144,8 +176,23 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def bind_requires_bearer_when_wan(self) -> Self:
-        if self.mcp.host in ("0.0.0.0", "::") and self.mcp.bearer_token is None:
+        if self.mcp.host in WILDCARD_BIND_HOSTS and self.mcp.bearer_token is None:
             raise ValueError("mcp.bearer_token is required when mcp.host is 0.0.0.0 or ::")
+        return self
+
+    @model_validator(mode="after")
+    def wildcard_bind_requires_allowed_hosts(self) -> Self:
+        """A wildcard bind cannot imply which Host headers to accept, so require them explicitly.
+
+        Without an allowlist the transport's DNS-rebinding protection has nothing to enforce and any
+        Host/Origin would be accepted, which is the case that most needs the check.
+        """
+        if self.mcp.host in WILDCARD_BIND_HOSTS and not self.mcp.allowed_hosts:
+            raise ValueError(
+                "mcp.allowed_hosts is required when mcp.host is 0.0.0.0 or :: because the bind address "
+                'does not identify the hostnames clients use; list them (e.g. ["mcp.example.com", '
+                '"mcp.example.com:8765"]) or use ["*"] to disable Host/Origin validation'
+            )
         return self
 
     def manager_names(self) -> list[str]:
@@ -157,10 +204,18 @@ class AppConfig(BaseModel):
             if manager.name == target:
                 return manager
 
-        raise ValueError(f"Unknown sdwan_manager '{name}'. Available managers: {", ".join(self.manager_names())}")
+        raise ValueError(
+            f"Unknown sdwan_manager '{name}'. Available managers: {', '.join(self.manager_names())}"
+        )
 
 
 def load_config(config_path: Path) -> AppConfig:
+    """Load and validate the config file.
+
+    Every way the file can be unusable — missing, unparseable, referencing an unset environment
+    variable, or failing schema validation — raises ``RuntimeError`` with a message naming the file,
+    so a caller has a single exception type to handle when deciding to abort startup.
+    """
     if not config_path.is_file():
         raise RuntimeError(f"Config file not found: {config_path}")
     raw = config_path.read_text(encoding="utf-8")
@@ -172,7 +227,10 @@ def load_config(config_path: Path) -> AppConfig:
         data = {}
     if not isinstance(data, dict):
         raise RuntimeError(f"Config root must be a mapping, got {type(data).__name__}")
-    data = _expand_env_vars(data)
+    try:
+        data = _expand_env_vars(data)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid configuration in {config_path}: {exc}") from exc
     try:
         return AppConfig.model_validate(data)
     except ValidationError as exc:
@@ -186,7 +244,9 @@ def set_active_config(cfg: AppConfig) -> None:
 
 def get_config() -> AppConfig:
     if _active is None:
-        raise RuntimeError("Configuration not loaded; call set_active_config(load_config(...)) first")
+        raise RuntimeError(
+            "Configuration not loaded; call set_active_config(load_config(...)) first"
+        )
     return _active
 
 

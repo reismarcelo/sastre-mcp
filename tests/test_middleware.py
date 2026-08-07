@@ -22,11 +22,35 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 
+def _http_client(app, cfg) -> TestClient:
+    """Match Host header to MCP v2 DNS rebinding allowlist for the configured bind address."""
+    return TestClient(app, base_url=f"http://{cfg.mcp.host}:{cfg.mcp.port}")
+
+
+def _mcp_config(*, limits: dict | None = None, **mcp_overrides):
+    from sastre_mcp.config import AppConfig
+
+    return AppConfig.model_validate(
+        {
+            "sdwan_managers": [
+                {
+                    "name": "primary",
+                    "address": "127.0.0.1",
+                    "user": "test",
+                    "password": "testpass",
+                }
+            ],
+            "mcp": {"host": "127.0.0.1", "disable_rate_limit": True} | mcp_overrides,
+            "limits": limits or {},
+        }
+    )
+
+
 def test_bearer_required_when_configured() -> None:
     cfg = default_test_config(bearer_token="test-secret-token")
     set_active_config(cfg)
     app = build_http_app(cfg)
-    client = TestClient(app)
+    client = _http_client(app, cfg)
     r = client.post("/mcp", json={})
     assert r.status_code == 401
 
@@ -35,7 +59,7 @@ def test_bearer_accepts_valid_token() -> None:
     cfg = default_test_config(bearer_token="test-secret-token")
     set_active_config(cfg)
     app = build_http_app(cfg)
-    with TestClient(app) as client:
+    with _http_client(app, cfg) as client:
         r = client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "method": "initialize", "params": {}, "id": 1},
@@ -48,7 +72,7 @@ def test_payload_too_large() -> None:
     cfg = default_test_config()
     set_active_config(cfg)
     app = build_http_app(cfg)
-    client = TestClient(app)
+    client = _http_client(app, cfg)
     big = b"x" * (3 * 1024 * 1024)
     r = client.post(
         "/mcp",
@@ -56,6 +80,22 @@ def test_payload_too_large() -> None:
         headers={"content-length": str(len(big))},
     )
     assert r.status_code == 413
+
+
+def test_body_limit_above_transport_default_is_honored() -> None:
+    """A max_body_bytes above the transport's own 4 MiB default must not be capped by it."""
+    cfg = _mcp_config(limits={"max_body_bytes": 6 * 1024 * 1024})
+    set_active_config(cfg)
+    with _http_client(build_http_app(cfg), cfg) as client:
+        r = client.post(
+            "/mcp",
+            content=b"x" * (5 * 1024 * 1024),
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+            },
+        )
+    assert r.status_code != 413
 
 
 def test_payload_too_large_chunked_bypass() -> None:
@@ -338,32 +378,14 @@ def test_invalid_trusted_proxy_rejected_at_config_load() -> None:
 
 
 def _cors_config(origins: list[str]):
-    from sastre_mcp.config import AppConfig
-
-    return AppConfig.model_validate(
-        {
-            "sdwan_managers": [
-                {
-                    "name": "primary",
-                    "address": "127.0.0.1",
-                    "user": "test",
-                    "password": "testpass",
-                }
-            ],
-            "mcp": {
-                "host": "127.0.0.1",
-                "cors_origins": origins,
-                "disable_rate_limit": True,
-            },
-        }
-    )
+    return _mcp_config(cors_origins=origins)
 
 
 def test_cors_preflight_allows_configured_origin() -> None:
     cfg = _cors_config(["https://app.example.com"])
     set_active_config(cfg)
     app = build_http_app(cfg)
-    client = TestClient(app)
+    client = _http_client(app, cfg)
     r = client.options(
         "/mcp",
         headers={
@@ -380,7 +402,7 @@ def test_cors_preflight_rejects_unconfigured_origin() -> None:
     cfg = _cors_config(["https://app.example.com"])
     set_active_config(cfg)
     app = build_http_app(cfg)
-    client = TestClient(app)
+    client = _http_client(app, cfg)
     r = client.options(
         "/mcp",
         headers={
@@ -398,7 +420,7 @@ def test_no_cors_headers_when_origins_unset() -> None:
     app = build_http_app(cfg)
     # No CORS middleware is installed, so the preflight reaches the MCP app;
     # the context manager runs the lifespan so its task group is initialized.
-    with TestClient(app) as client:
+    with _http_client(app, cfg) as client:
         r = client.options(
             "/mcp",
             headers={
@@ -407,3 +429,98 @@ def test_no_cors_headers_when_origins_unset() -> None:
             },
         )
     assert "access-control-allow-origin" not in r.headers
+
+
+# --- Host / Origin validation (DNS rebinding) -------------------------------
+
+# 421 is returned for a rejected Host, 403 for a rejected Origin.
+_REBIND_REJECTED = (403, 421)
+
+
+def _initialize(client: TestClient, base_url: str, **headers: str):
+    """POST an initialize request, which is enough to exercise Host/Origin validation."""
+    return client.post(
+        f"{base_url}/mcp",
+        json={"jsonrpc": "2.0", "method": "initialize", "params": {}, "id": 1},
+        headers={"Accept": "application/json, text/event-stream"} | headers,
+    )
+
+
+def test_configured_cors_origin_passes_origin_check() -> None:
+    """A cross-origin POST from an allowed origin must survive the transport check, not just CORS."""
+    cfg = _cors_config(["https://app.example.com"])
+    set_active_config(cfg)
+    with _http_client(build_http_app(cfg), cfg) as client:
+        r = _initialize(client, "", Origin="https://app.example.com")
+    assert r.status_code not in _REBIND_REJECTED
+
+
+def test_unconfigured_origin_rejected() -> None:
+    cfg = _cors_config(["https://app.example.com"])
+    set_active_config(cfg)
+    with _http_client(build_http_app(cfg), cfg) as client:
+        r = _initialize(client, "", Origin="https://evil.example.com")
+    assert r.status_code == 403
+
+
+def test_loopback_origin_allowed_without_cors_config() -> None:
+    cfg = default_test_config()
+    set_active_config(cfg)
+    with _http_client(build_http_app(cfg), cfg) as client:
+        r = _initialize(client, "", Origin="http://localhost:3000")
+    assert r.status_code not in _REBIND_REJECTED
+
+
+def test_foreign_host_rejected_on_wildcard_bind() -> None:
+    cfg = _mcp_config(host="0.0.0.0", bearer_token="tok", allowed_hosts=["mcp.example.com"])
+    set_active_config(cfg)
+    with TestClient(build_http_app(cfg)) as client:
+        r = _initialize(client, "http://evil.example.com", Authorization="Bearer tok")
+    assert r.status_code == 421
+
+
+def test_configured_host_accepted_on_wildcard_bind() -> None:
+    cfg = _mcp_config(host="0.0.0.0", bearer_token="tok", allowed_hosts=["mcp.example.com"])
+    set_active_config(cfg)
+    with TestClient(build_http_app(cfg)) as client:
+        r = _initialize(client, "http://mcp.example.com", Authorization="Bearer tok")
+    assert r.status_code not in _REBIND_REJECTED
+
+
+def test_allowed_hosts_wildcard_disables_check() -> None:
+    cfg = _mcp_config(host="0.0.0.0", bearer_token="tok", allowed_hosts=["*"])
+    set_active_config(cfg)
+    with TestClient(build_http_app(cfg)) as client:
+        r = _initialize(client, "http://evil.example.com", Authorization="Bearer tok")
+    assert r.status_code not in _REBIND_REJECTED
+
+
+def test_ipv6_bind_host_pattern_is_bracketed() -> None:
+    from sastre_mcp.server import _transport_security
+
+    settings = _transport_security(_mcp_config(host="2001:db8::1").mcp)
+    assert settings.allowed_hosts == ["[2001:db8::1]:*"]
+
+
+def test_hostname_bind_pattern_is_not_bracketed() -> None:
+    from sastre_mcp.server import _transport_security
+
+    settings = _transport_security(_mcp_config(host="mcp.example.com").mcp)
+    assert settings.allowed_hosts == ["mcp.example.com:*"]
+
+
+def test_wildcard_cors_origin_warns(caplog: pytest.LogCaptureFixture) -> None:
+    from sastre_mcp.server import _transport_security
+
+    with caplog.at_level("WARNING"):
+        _transport_security(_mcp_config(cors_origins=["*"]).mcp)
+    assert "cors_origins contains '*'" in caplog.text
+
+
+def test_specific_address_bind_accepts_its_own_address() -> None:
+    cfg = _mcp_config(host="10.0.0.5", port=9000)
+    set_active_config(cfg)
+    app = build_http_app(cfg)
+    with TestClient(app) as client:
+        assert _initialize(client, "http://10.0.0.5:9000").status_code not in _REBIND_REJECTED
+        assert _initialize(client, "http://evil.example.com").status_code == 421

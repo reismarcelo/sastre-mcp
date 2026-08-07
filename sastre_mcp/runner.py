@@ -67,8 +67,14 @@ def _clean_error_message(exc: Exception) -> str:
     return "An unexpected error occurred while executing the task."
 
 
-type ShowTaskArgs = (ShowDevicesArgs | ShowRealtimeArgs | ShowStateArgs | ShowStatisticsArgs | ShowAlarmsArgs
-                     | ShowEventsArgs)
+type ShowTaskArgs = (
+    ShowDevicesArgs
+    | ShowRealtimeArgs
+    | ShowStateArgs
+    | ShowStatisticsArgs
+    | ShowAlarmsArgs
+    | ShowEventsArgs
+)
 
 type ListTaskArgs = ListConfigArgs | ListCertificateArgs
 
@@ -159,14 +165,18 @@ def _run_task_args(
         return f"Error: {_clean_error_message(exc)} (reference id: {correlation_id})"
 
 
-def run_show_args(args: ShowTaskArgs, *, output_format: Format = "text", manager: str | None = None) -> str:
+def run_show_args(
+    args: ShowTaskArgs, *, output_format: Format = "text", manager: str | None = None
+) -> str:
     """Execute ``sdwan show ...`` via TaskShow.runner with validated Show*Args."""
     return _run_task_args(
         args, TaskShow, output_format=output_format, manager=manager, task_label="show task"
     )
 
 
-def run_list_args(args: ListTaskArgs, *, output_format: Format = "text", manager: str | None = None) -> str:
+def run_list_args(
+    args: ListTaskArgs, *, output_format: Format = "text", manager: str | None = None
+) -> str:
     """Execute ``sdwan list ...`` via TaskList.runner with validated List*Args."""
     return _run_task_args(
         args, TaskList, output_format=output_format, manager=manager, task_label="list task"
@@ -178,26 +188,25 @@ def run_show_template_args(
 ) -> str:
     """Execute ``sdwan show-template ...`` via TaskShowTemplate.runner with validated ShowTemplate*Args."""
     return _run_task_args(
-        args, TaskShowTemplate, output_format=output_format, manager=manager, task_label="show-template task"
+        args,
+        TaskShowTemplate,
+        output_format=output_format,
+        manager=manager,
+        task_label="show-template task",
     )
 
 
 def list_sdwan_managers_info() -> str:
-    """Return configured SD-WAN Managers (names, addresses; never secrets)."""
+    """Return configured SD-WAN Managers"""
     cfg = get_config()
     lines = ["Configured SD-WAN Managers:"]
     for manager in cfg.sdwan_managers:
         is_default = " (default)" if manager.name == cfg.default_manager else ""
-        auth = "apikey" if manager.apikey else "user/password"
         lines.append(
-            f"- {manager.name}{is_default}: {manager.address}:{manager.port} "
-            f"(auth: {auth}, tenant: {manager.tenant or 'none'})"
+            f"- {manager.name}{is_default}: {manager.address}:{manager.port} (tenant: {manager.tenant or 'none'})"
         )
     lines.append("")
-    lines.append(
-        "Pass the chosen name as the `manager` argument to a show, show-template, or list tool; "
-        "omit it to use the default."
-    )
+    lines.append("Pass the chosen name as the `manager` argument to a tool; omit it to use the default.")
     return "\n".join(lines)
 
 

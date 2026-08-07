@@ -155,10 +155,49 @@ def test_wan_bind_with_bearer_is_valid() -> None:
     cfg = AppConfig.model_validate(
         {
             "sdwan_managers": [_manager()],
-            "mcp": {"host": "0.0.0.0", "bearer_token": "tok"},
+            "mcp": {
+                "host": "0.0.0.0",
+                "bearer_token": "tok",
+                "allowed_hosts": ["mcp.example.com"],
+            },
         }
     )
     assert cfg.mcp.host == "0.0.0.0"
+
+
+def test_wan_bind_requires_allowed_hosts() -> None:
+    with pytest.raises(ValidationError, match="allowed_hosts is required"):
+        AppConfig.model_validate(
+            {
+                "sdwan_managers": [_manager()],
+                "mcp": {"host": "0.0.0.0", "bearer_token": "tok"},
+            }
+        )
+
+
+def test_wan_bind_allowed_hosts_wildcard_accepted() -> None:
+    cfg = AppConfig.model_validate(
+        {
+            "sdwan_managers": [_manager()],
+            "mcp": {"host": "0.0.0.0", "bearer_token": "tok", "allowed_hosts": ["*"]},
+        }
+    )
+    assert cfg.mcp.allowed_hosts == ["*"]
+
+
+def test_loopback_bind_does_not_require_allowed_hosts() -> None:
+    cfg = AppConfig.model_validate({"sdwan_managers": [_manager()], "mcp": {"host": "127.0.0.1"}})
+    assert cfg.mcp.allowed_hosts == []
+
+
+def test_allowed_hosts_rejects_url_entry() -> None:
+    with pytest.raises(ValidationError, match="not a URL"):
+        McpConfig.model_validate({"allowed_hosts": ["https://mcp.example.com/mcp"]})
+
+
+def test_allowed_hosts_rejects_blank_entry() -> None:
+    with pytest.raises(ValidationError, match="must be non-empty"):
+        McpConfig.model_validate({"allowed_hosts": ["  "]})
 
 
 def test_extra_keys_forbidden() -> None:

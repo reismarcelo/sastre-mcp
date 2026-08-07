@@ -163,14 +163,16 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._expected_token = expected_token.encode("utf-8")
 
-    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         auth = request.headers.get("authorization") or ""
         prefix = "Bearer "
         if not auth.startswith(prefix):
             return JSONResponse(
                 {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
             )
-        token = auth[len(prefix):].strip().encode("utf-8")
+        token = auth[len(prefix) :].strip().encode("utf-8")
         if not token or not hmac.compare_digest(token, self._expected_token):
             return JSONResponse(
                 {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
@@ -213,7 +215,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         for host in stale:
             del self._hits[host]
 
-    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         now = time.monotonic()
         window_start = now - self._window_secs
         if now - self._last_prune >= self._window_secs:
